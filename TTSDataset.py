@@ -177,16 +177,14 @@ class MyDataset(Dataset):
         if isinstance(batch[0], collections.Mapping):
 
             text_lenghts = np.array([len(d["text"]) for d in batch])
-            text_lenghts, ids_sorted_decreasing = torch.sort(
-                torch.LongTensor(text_lenghts), dim=0, descending=True)
 
-            wav = [batch[idx]['wav'] for idx in ids_sorted_decreasing]
+            wav = [batch[idx]['wav'] for idx in range(len(batch))]
             item_idxs = [
-                batch[idx]['item_idx'] for idx in ids_sorted_decreasing
+                batch[idx]['item_idx'] for idx in range(len(batch))
             ]
-            text = [batch[idx]['text'] for idx in ids_sorted_decreasing]
+            text = [batch[idx]['text'] for idx in range(len(batch))]
             speaker_name = [batch[idx]['speaker_name']
-                            for idx in ids_sorted_decreasing]
+                            for idx in range(len(batch))]
 
             mel = [self.ap.melspectrogram(w).astype('float32') for w in wav]
             linear = [self.ap.spectrogram(w).astype('float32') for w in wav]
@@ -215,14 +213,6 @@ class MyDataset(Dataset):
             # B x T x D
             linear = linear.transpose(0, 2, 1)
             mel = mel.transpose(0, 2, 1)
-
-            # convert things to pytorch
-            text_lenghts = torch.LongTensor(text_lenghts)
-            text = torch.LongTensor(text)
-            linear = torch.FloatTensor(linear).contiguous()
-            mel = torch.FloatTensor(mel).contiguous()
-            mel_lengths = torch.LongTensor(mel_lengths)
-            stop_targets = torch.FloatTensor(stop_targets)
 
             return text, text_lenghts, speaker_name, linear, mel, mel_lengths, \
                    stop_targets, item_idxs

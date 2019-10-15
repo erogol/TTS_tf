@@ -12,11 +12,8 @@ def text_to_seqvec(text, CONFIG, use_cuda):
             dtype=np.int32)
     else:
         seq = np.asarray(text_to_sequence(text, text_cleaner), dtype=np.int32)
-    # torch tensor
-    chars_var = torch.from_numpy(seq).unsqueeze(0)
-    if use_cuda:
-        chars_var = chars_var.cuda()
-    return chars_var.long()
+    chars_var = np.expand_dims(seq, axis=0)
+    return chars_var.astype(np.int32)
 
 
 def compute_style_mel(style_wav, ap, use_cuda):
@@ -43,9 +40,9 @@ def run_model(model, inputs, CONFIG, truncated, speaker_id=None, style_mel=None)
 
 
 def parse_outputs(postnet_output, decoder_output, alignments):
-    postnet_output = postnet_output[0].data.cpu().numpy()
-    decoder_output = decoder_output[0].data.cpu().numpy()
-    alignment = alignments[0].cpu().data.numpy()
+    postnet_output = postnet_output[0].numpy()
+    decoder_output = decoder_output[0].numpy()
+    alignment = alignments[0].numpy()
     return postnet_output, decoder_output, alignment
 
 
@@ -64,7 +61,7 @@ def inv_spectrogram(postnet_output, ap, CONFIG):
 def id_to_torch(speaker_id):
     if speaker_id is not None:
         speaker_id = np.asarray(speaker_id)
-        speaker_id = torch.from_numpy(speaker_id).unsqueeze(0)
+        speaker_id = np.expand_dims(speaker_id, axis=0)
     return speaker_id
 
 
@@ -101,8 +98,6 @@ def synthesis(model,
     # preprocess the given text
     inputs = text_to_seqvec(text, CONFIG, use_cuda)
     speaker_id = id_to_torch(speaker_id)
-    if speaker_id is not None and use_cuda:
-        speaker_id = speaker_id.cuda()
     # synthesize voice
     decoder_output, postnet_output, alignments, stop_tokens = run_model(
         model, inputs, CONFIG, truncated, speaker_id, style_mel)

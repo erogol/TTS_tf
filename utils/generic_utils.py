@@ -6,6 +6,7 @@ import datetime
 import json
 import subprocess
 import importlib
+import pickle
 import numpy as np
 from collections import OrderedDict, Counter
 
@@ -56,6 +57,44 @@ def get_commit_hash():
         commit = "0000000"
     print(' > Git Hash: {}'.format(commit))
     return commit
+
+
+def save_checkpoint(model, optimizer, optimizer_st, model_loss, out_path,
+                    current_step, epoch):
+    checkpoint_path = 'checkpoint_{}.pkl'.format(current_step)
+    checkpoint_path = os.path.join(out_path, checkpoint_path)
+    print("   | > Checkpoint saving : {}".format(checkpoint_path))
+    state = {
+        'model': model.get_weights(),
+        'optimizer': optimizer,
+        'step': current_step,
+        'epoch': epoch,
+        'linear_loss': model_loss,
+        'date': datetime.date.today().strftime("%B %d, %Y"),
+        'r': model.decoder.r
+    }
+    pickle.dump(state, open(checkpoint_path, 'wb'))
+
+
+def save_best_model(model, optimizer, model_loss, best_loss, out_path,
+                    current_step, epoch):
+    if model_loss < best_loss:
+        state = {
+            'model': model.get_weights(),
+            'optimizer': optimizer,
+            'step': current_step,
+            'epoch': epoch,
+            'linear_loss': model_loss,
+            'date': datetime.date.today().strftime("%B %d, %Y"),
+            'r': model.decoder.r
+        }
+        best_loss = model_loss
+        bestmodel_path = 'best_model.pkl'
+        bestmodel_path = os.path.join(out_path, bestmodel_path)
+        print("\n > BEST MODEL ({0:.5f}) : {1:}".format(
+            model_loss, bestmodel_path))
+        pickle.dump(state, open(bestmodel_path, 'wb'))
+    return best_loss
 
 
 def create_experiment_folder(root_path, model_name, debug):
@@ -126,8 +165,10 @@ def count_parameters(model, c):
         input_dummy = np.random.rand(8, 128).astype('float32')
         input_lengths = np.random.randint(100, 129, (8, ))
         input_lengths[-1] = 128
-        mel_spec = np.random.rand(8, 30, c.audio['num_mels']).astype('float32')
-        speaker_ids = np.random.randint(0, 5, (8, )) if c.use_speaker_embedding else None
+        mel_spec = np.random.rand(8, 2 * c.r,
+                                  c.audio['num_mels']).astype('float32')
+        speaker_ids = np.random.randint(
+            0, 5, (8, )) if c.use_speaker_embedding else None
         _ = model(input_dummy, input_lengths, mel_spec, speaker_ids)
         return model.count_params()
 
@@ -161,7 +202,7 @@ def gradual_training_scheduler(global_step, config):
         if global_step >= values[0]:
             new_values = values
     return new_values[1], new_values[2]
-    
+
 
 class KeepAverage():
     def __init__(self):
