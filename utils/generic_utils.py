@@ -169,7 +169,7 @@ def count_parameters(model, c):
                                   c.audio['num_mels']).astype('float32')
         speaker_ids = np.random.randint(
             0, 5, (8, )) if c.use_speaker_embedding else None
-        _ = model(input_dummy, input_lengths, mel_spec, speaker_ids)
+        _ = model(input_dummy, input_lengths, mel_spec)
         return model.count_params()
 
 
