@@ -10,8 +10,8 @@ import numpy as np
 import tensorflow as tf
 from torch.utils.data import DataLoader
 import logging
-tf.get_logger().setLevel(logging.ERROR)
-tf.autograph.set_verbosity(1)
+# tf.get_logger().setLevel(logging.ERROR)
+# tf.autograph.set_verbosity(1)
 
 from TTS_tf.TTSDataset import MyDataset 
 from TTS_tf.layers.losses import loss_l1, loss_l2, stopnet_loss
@@ -304,8 +304,7 @@ def evaluate(model, criterion, criterion_st, ap, global_step, epoch):
             # set stop targets view, we predict a single stop token per r frames prediction
             stop_targets = stop_targets.reshape(text_input.shape[0],
                                          stop_targets.shape[1] // c.r, -1)
-            stop_targets = tf.squeeze(stop_targets.sum(2) > 0.0)
-
+            stop_targets = (stop_targets.sum(2) > 0.0).astype(np.float32)
             # forward pass
             decoder_output, postnet_output, alignments, stop_tokens = model(
                 text_input, text_lengths, mel_input, speaker_ids=speaker_ids)

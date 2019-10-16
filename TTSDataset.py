@@ -93,13 +93,13 @@ class MyDataset(Dataset):
         try:
             phonemes = np.load(cache_path)
         except FileNotFoundError:
-            phonemes = self._generate_and_cache_phoneme_sequence(text,
-                                                                 cache_path)
+            phonemes = self._generate_and_cache_phoneme_sequence(
+                text, cache_path)
         except (ValueError, IOError):
             print(" > ERROR: failed loading phonemes for {}. "
                   "Recomputing.".format(wav_file))
-            phonemes = self._generate_and_cache_phoneme_sequence(text,
-                                                                 cache_path)
+            phonemes = self._generate_and_cache_phoneme_sequence(
+                text, cache_path)
         if self.enable_eos_bos:
             phonemes = pad_with_eos_bos(phonemes)
             phonemes = np.asarray(phonemes, dtype=np.int32)
@@ -112,8 +112,8 @@ class MyDataset(Dataset):
         if self.use_phonemes:
             text = self._load_or_generate_phoneme_sequence(wav_file, text)
         else:
-            text = np.asarray(
-                text_to_sequence(text, [self.cleaners]), dtype=np.int32)
+            text = np.asarray(text_to_sequence(text, [self.cleaners]),
+                              dtype=np.int32)
 
         assert text.size > 0, self.items[idx][1]
         assert wav.size > 0, self.items[idx][1]
@@ -154,8 +154,9 @@ class MyDataset(Dataset):
             print(" | > Max length sequence: {}".format(np.max(lengths)))
             print(" | > Min length sequence: {}".format(np.min(lengths)))
             print(" | > Avg length sequence: {}".format(np.mean(lengths)))
-            print(" | > Num. instances discarded by max-min (max={}, min={}) seq limits: {}".format(
-                self.max_seq_len, self.min_seq_len, len(ignored)))
+            print(
+                " | > Num. instances discarded by max-min (max={}, min={}) seq limits: {}"
+                .format(self.max_seq_len, self.min_seq_len, len(ignored)))
             print(" | > Batch group size: {}.".format(self.batch_group_size))
 
     def __len__(self):
@@ -179,17 +180,16 @@ class MyDataset(Dataset):
             text_lenghts = np.array([len(d["text"]) for d in batch])
 
             wav = [batch[idx]['wav'] for idx in range(len(batch))]
-            item_idxs = [
-                batch[idx]['item_idx'] for idx in range(len(batch))
-            ]
+            item_idxs = [batch[idx]['item_idx'] for idx in range(len(batch))]
             text = [batch[idx]['text'] for idx in range(len(batch))]
-            speaker_name = [batch[idx]['speaker_name']
-                            for idx in range(len(batch))]
+            speaker_name = [
+                batch[idx]['speaker_name'] for idx in range(len(batch))
+            ]
 
             mel = [self.ap.melspectrogram(w).astype('float32') for w in wav]
             linear = [self.ap.spectrogram(w).astype('float32') for w in wav]
 
-            mel_lengths = [m.shape[1] + 1 for m in mel]  # +1 for zero-frame
+            mel_lengths = np.array([m.shape[1] + 1 for m in mel])  # +1 for zero-frame
 
             # compute 'stop token' targets
             stop_targets = [
@@ -214,8 +214,8 @@ class MyDataset(Dataset):
             linear = linear.transpose(0, 2, 1)
             mel = mel.transpose(0, 2, 1)
 
-            return text, text_lenghts, speaker_name, linear, mel, mel_lengths, \
-                   stop_targets, item_idxs
+            return text.astype(np.int32), text_lenghts.astype(np.int32), speaker_name, linear.astype(np.float32), mel.astype(np.float32), mel_lengths.astype(np.int32), \
+                   stop_targets.astype(np.float32), item_idxs
 
         raise TypeError(("batch must contain tensors, numbers, dicts or lists;\
                          found {}".format(type(batch[0]))))
