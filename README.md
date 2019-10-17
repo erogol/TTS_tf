@@ -1,3 +1,6 @@
+Tensorflow implementation of https://github.com/mozilla/TTS
+
+### TODO 
 - [ ] Catching up with TTS pytorch
     - [x] Replace pytorch layers with TF
     - [x] Basic eager mode training 
