@@ -84,7 +84,7 @@ class Tacotron(tf.keras.Model):
         #inputs = self._add_speaker_embedding(inputs, gst_outputs)
         return inputs
 
-    def call(self, characters, text_lengths, mel_specs):
+    def call(self, characters, text_lengths, mel_specs, speaker_ids=None):
         B = characters.shape[0]
         mask = tf.sequence_mask(text_lengths)
         inputs = self.embedding(characters)
