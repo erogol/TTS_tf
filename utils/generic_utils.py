@@ -162,11 +162,13 @@ def count_parameters(model, c):
     try:
         return model.count_params()
     except:
-        input_dummy = np.random.rand(8, 128).astype('float32')
+        input_dummy = tf.convert_to_tensor(np.random.rand(8, 128).astype('int32'))
         input_lengths = np.random.randint(100, 129, (8, ))
         input_lengths[-1] = 128
+        input_lengths = tf.convert_to_tensor(input_lengths.astype('int32'))
         mel_spec = np.random.rand(8, 2 * c.r,
                                   c.audio['num_mels']).astype('float32')
+        mel_spec = tf.convert_to_tensor(mel_spec)
         speaker_ids = np.random.randint(
             0, 5, (8, )) if c.use_speaker_embedding else None
         _ = model(input_dummy, input_lengths, mel_spec)
