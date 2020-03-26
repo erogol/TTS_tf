@@ -194,7 +194,6 @@ class DecoderTests(unittest.TestCase):
         output, alignment, stop_tokens = layer(
             dummy_input, dummy_memory, mask=None)
 
-
         assert output.shape[0] == 4
         assert output.shape[1] == 10, "size not {}".format(output.shape[1])
         assert output.shape[2] == 80, "size not {}".format(output.shape[2])

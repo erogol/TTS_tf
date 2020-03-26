@@ -34,6 +34,7 @@ from TTS_tf.utils.measures import alignment_diagonal_score
 
 np.random.seed(1)
 tf.random.set_seed(1)
+tf.executing_eagerly()
 use_cuda = tf.test.is_gpu_available()
 num_gpus = len(tf.config.experimental.list_physical_devices('GPU'))
 print(" > Using CUDA: ", use_cuda)
@@ -51,7 +52,7 @@ def setup_loader(ap, is_val=False, verbose=False):
         dataset = MyDataset(
             c.r,
             c.text_cleaner,
-            meta_data=meta_data_eval[:64] if is_val else meta_data_train[:64],
+            meta_data=meta_data_eval[:64] if is_val else meta_data_train,
             ap=ap,
             batch_group_size=0 if is_val else c.batch_group_size * c.batch_size,
             min_seq_len=c.min_seq_len,
@@ -113,6 +114,13 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
         avg_spec_length = np.mean(mel_lengths)
         loader_time = time.time() - end_time
 
+        # convert to tf
+        text_input = tf.convert_to_tensor(text_input).gpu()
+        text_lengths = tf.convert_to_tensor(text_lengths).gpu()
+        linear_input = tf.convert_to_tensor(linear_input).gpu()
+        mel_input = tf.convert_to_tensor(mel_input).gpu()
+        mel_lengths = tf.convert_to_tensor(mel_lengths)
+
         if c.use_speaker_embedding:
             speaker_ids = [speaker_mapping[speaker_name]
                            for speaker_name in speaker_names]
@@ -126,10 +134,10 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
         global_step += 1
         current_lr = optimizer.lr.numpy()
 
-        with tf.GradientTape(persistent=True) as tape:
+        with tf.GradientTape(persistent=False) as tape:
             # forward pass model
             decoder_output, postnet_output, alignments, stop_tokens = model(
-                text_input, text_lengths, mel_input, speaker_ids=speaker_ids)
+                text_input, text_lengths, mel_input)
             
             # loss computation
             stop_loss = criterion_st(
@@ -162,9 +170,9 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
         keep_avg.update_value('avg_align_score', align_score)
 
         # backpass and check the grad norm for stop loss
-        if c.separate_stopnet:
-            stopnet_grads = tape.gradient(stop_loss, model.decoder.stopnet.trainable_variables)
-            optimizer_st.apply_gradients(zip(stopnet_grads, model.decoder.stopnet.trainable_variables))
+        #if c.separate_stopnet:
+        #    stopnet_grads = tape.gradient(stop_loss, model.decoder.stopnet.trainable_variables)
+        #    optimizer_st.apply_gradients(zip(stopnet_grads, model.decoder.stopnet.trainable_variables))
         del tape
 
         step_time = time.time() - start_time
@@ -307,7 +315,7 @@ def evaluate(model, criterion, criterion_st, ap, global_step, epoch):
             stop_targets = (stop_targets.sum(2) > 0.0).astype(np.float32)
             # forward pass
             decoder_output, postnet_output, alignments, stop_tokens = model(
-                text_input, text_lengths, mel_input, speaker_ids=speaker_ids)
+                text_input, text_lengths, mel_input) #speaker_ids=speaker_ids)
 
             # loss computation
             stop_loss = criterion_st(
@@ -503,8 +511,8 @@ def main(args):  # pylint: disable=redefined-outer-name
     # TODO: scheduler 
     scheduler = None
 
-    num_params = count_parameters(model, c)
-    print("\n > Model has {} parameters".format(num_params), flush=True)
+    #num_params = count_parameters(model, c)
+    #print("\n > Model has {} parameters".format(num_params), flush=True)
 
     if 'best_loss' not in locals():
         best_loss = float('inf')
