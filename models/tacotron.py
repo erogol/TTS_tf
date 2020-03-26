@@ -11,6 +11,7 @@ import tensorflow as tf
 from tensorflow import keras
 
 from TTS_tf.layers.tacotron import Encoder, Decoder, Postnet
+from TTS_tf.utils.tf_utils import shape_list
 
 class Tacotron(tf.keras.Model):
     def __init__(self,
@@ -84,8 +85,14 @@ class Tacotron(tf.keras.Model):
         #inputs = self._add_speaker_embedding(inputs, gst_outputs)
         return inputs
 
-    def call(self, characters, text_lengths, mel_specs, speaker_ids=None):
-        B = characters.shape[0]
+    #@tf.function(input_signature=[
+    #        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #        tf.TensorSpec(shape=(None, ), dtype=tf.int32),
+    #        tf.TensorSpec(shape=(None, None, 80), dtype=tf.float32),
+    #    ])
+    def call(self, characters, text_lengths, mel_specs): # speaker_ids=None):
+        print('Tracing!')
+        B = shape_list(characters)[0]
         mask = tf.sequence_mask(text_lengths)
         inputs = self.embedding(characters)
         self._init_states()
