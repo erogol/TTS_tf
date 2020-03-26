@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow import keras
 from TTS_tf.layers.common_layers import Prenet, Attention
+from TTS_tf.utils.tf_utils import shape_list
 
 
 class BatchNormConv1d(keras.layers.Layer):
@@ -230,8 +231,8 @@ class Decoder(keras.layers.Layer):
         """
         B = memory.shape[0]
         # Grouping multiple frames if necessary
-        if memory.shape[-1] == self.memory_dim:
-            memory = tf.reshape(memory, [B, memory.shape[1] // self.r, -1])
+        if memory.shape[-1] == self.memory_dim and self.r > 1:
+            memory = tf.reshape(memory, [B, -1, tf.shape(memory)[2] * self.r])
         # Time first (T_decoder, B, memory_dim)
         memory = tf.transpose(memory, perm=[1, 0, 2])
         return memory
@@ -240,8 +241,8 @@ class Decoder(keras.layers.Layer):
         """
         Initialization of decoder states
         """
-        B = inputs.shape[0]
-        T = inputs.shape[1]
+        B = shape_list(inputs)[0]
+        T = shape_list(inputs)[1]
         self.attention.init_states(inputs)
         # go frame as zeros matrix
         if self.use_memory_queue:
@@ -254,7 +255,7 @@ class Decoder(keras.layers.Layer):
         self.decoder_rnn_hiddens = [
             tf.zeros([B, 256]) for idx in range(len(self.decoder_rnns))
         ]
-        self.context_vec = tf.zeros([B, self.input_dim])
+        self.context_vec = tf.zeros([B, 1, self.input_dim])
         self.attention.process_values(inputs)
 
     def _parse_outputs(self, outputs, attentions, stop_tokens):
@@ -266,24 +267,19 @@ class Decoder(keras.layers.Layer):
             tf.transpose(tf.stack(stop_tokens), (1, 0, 2)), 2)
         return outputs, attentions, stop_tokens
 
-    def decode(self, inputs, mask=None):
-        # Prenet
-        processed_memory = self.prenet(self.memory_input)
+    def decode(self, inputs, processed_memory, mask=None):
         # Attention RNN
-        attention_rnn_input = tf.expand_dims(
-            tf.concat([processed_memory, self.context_vec], -1), 1)
-        self.attention_rnn_hidden = self.attention_rnn(
-            attention_rnn_input, self.attention_rnn_hidden)
+        attention_rnn_input = tf.concat([processed_memory, self.context_vec], -1)
+        self.attention_rnn_hidden = self.attention_rnn(attention_rnn_input, initial_state=self.attention_rnn_hidden)
         self.context_vec = self.attention(self.attention_rnn_hidden, inputs,
                                           mask)
         # Concat RNN output and attention context vector
         decoder_input = self.project_to_decoder_in(
-            tf.concat([self.attention_rnn_hidden, self.context_vec], -1))
-        decoder_input = tf.expand_dims(decoder_input, 1)
+            tf.concat([tf.expand_dims(self.attention_rnn_hidden, axis=1), self.context_vec], -1))
         # Pass through the decoder RNNs
         for idx in range(len(self.decoder_rnns)):
             self.decoder_rnn_hiddens[idx] = self.decoder_rnns[idx](
-                decoder_input, self.decoder_rnn_hiddens[idx])
+                decoder_input, initial_state=self.decoder_rnn_hiddens[idx])
             # Residual connection
             decoder_input = tf.expand_dims(self.decoder_rnn_hiddens[idx],
                                            1) + decoder_input
@@ -304,12 +300,6 @@ class Decoder(keras.layers.Layer):
     def _update_memory_input(self, new_memory):
         self.memory_input = new_memory[:, self.memory_dim * (self.r - 1):]
 
-    # @tf.function(input_signature=(tf.TensorSpec(shape=[None],
-                                #                 dtype=tf.float32),
-                                #   tf.TensorSpec(shape=[None],
-                                #                 dtype=tf.float32),
-                                #   tf.TensorSpec(shape=[None],
-                                #                 dtype=tf.bool)))
     def call(self, inputs, memory, mask):
         """
         Args:
@@ -324,25 +314,37 @@ class Decoder(keras.layers.Layer):
             - memory: batch x #mel_specs x mel_spec_dim
         """
         # Run greedy decoding if memory is None
-        memory = self._reshape_memory(memory)
-        outputs = []
-        attentions = []
-        stop_tokens = []
-        t = 0
+        # memory = self._reshape_memory(memory)
+        B, T, D = shape_list(memory)
+        num_iter = shape_list(memory)[1] // self.r
+        memory_zero = tf.zeros([B, 1, D])
+        outputs = tf.TensorArray(dtype=tf.float32, size=num_iter)
+        attentions = tf.TensorArray(dtype=tf.float32, size=num_iter)
+        stop_tokens = tf.TensorArray(dtype=tf.float32, size=num_iter)
         self._init_states(inputs)
-        while len(outputs) < memory.shape[0]:
-            if t > 0:
-                new_memory = memory[t - 1]
-                self._update_memory_input(new_memory)
+            #stop_tokens.append(stop_tokenr
+        memory_aligned = memory[:, (self.r - 1):(T-self.r):self.r]
+        prenet_in = tf.concat([memory_zero, memory_aligned], axis=1)
+        prenet_out = self.prenet(prenet_in)
+        # TODO: memory queuing
+        t = 0
+        while t < num_iter:
+            new_memory = tf.expand_dims(prenet_out[:, t], axis=1)
             # if speaker_embeddings is not None:
             # self.memory_input = tf.concat([self.memory_input, speaker_embeddings], axis=-1)
-            output, stop_token, attention = self.decode(inputs, mask)
-            outputs += [output]
-            attentions += [attention]
-            stop_tokens += [stop_token]
+            output, stop_token, attention = self.decode(inputs, new_memory, mask)
+            outputs = outputs.write(t, output)
+            attentions = attentions.write(t, attention)
+            stop_tokens = stop_tokens.write(t, stop_token)
             t += 1
-
-        return self._parse_outputs(outputs, attentions, stop_tokens)
+        outputs = outputs.stack()
+        attentions = attentions.stack()
+        stop_tokens = stop_tokens.stack()
+        outputs = tf.transpose(outputs, [1, 0, 2])
+        attentions = tf.transpose(attentions, [1, 0 ,2])
+        stop_tokens = tf.transpose(stop_tokens, [1, 0, 2])
+        stop_tokens = tf.squeeze(stop_tokens, axis=2)
+        return outputs, attentions, stop_tokens
 
     def inference(self, inputs, speaker_embeddings=None):
         """
