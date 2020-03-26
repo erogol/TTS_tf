@@ -2,6 +2,8 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.python.ops import math_ops
 
+from TTS_tf.utils.tf_utils import shape_list
+
 
 class Linear(keras.layers.Layer):
     def __init__(self, units, use_bias=True):
@@ -66,6 +68,8 @@ class Prenet(keras.layers.Layer):
 
 class Attention(keras.layers.Layer):
     """TODO: implement forward_attention"""
+    """TODO: location sensitive attention"""
+    """TODO: implement attention windowing """
     def __init__(self, attn_dim, use_loc_attn, loc_attn_n_filters,
                  loc_attn_kernel_size, use_windowing, norm, use_forward_attn,
                  use_trans_agent, use_forward_attn_mask):
@@ -89,26 +93,12 @@ class Attention(keras.layers.Layer):
                 use_bias=False)
             self.loc_dense = keras.layers.Dense(attn_dim, use_bias=False)
 
-    def update_loc_attn(self, attn_weights):
-        self.attn_weights_cum += attn_weights
-    
-    def init_win_idx(self):
-        self.win_idx = -1
-        self.win_back = 2
-        self.win_front = 6
-
-    def init_loc_attn(self, values):
-        B, T = values.shape[:2]
-        self.attn_weights_cum = tf.zeros([B, T, 1])
-
     def init_states(self, values):
-        B, T = values.shape[:2]
-        self.attn_weights = tf.zeros([B, T, 1])
-        self.processed_values = None
-        if self.use_loc_attn:
-            self.init_loc_attn(values)
+        pass
 
     def process_values(self, values):
+        """ preprocess values since this compution is repeating each
+        decoder step """
         self.processed_values = self.input_layer(values)
 
     def get_loc_attn(self, query):
@@ -122,6 +112,7 @@ class Attention(keras.layers.Layer):
         return score, processed_query
 
     def get_attn(self, query):
+        """ compute query layer and unnormalized attention weights """
         processed_query = self.query_layer(tf.expand_dims(query, 1))
         score = self.v(tf.nn.tanh(self.processed_values + processed_query))
         return score, processed_query
@@ -141,10 +132,7 @@ class Attention(keras.layers.Layer):
             attn_weights: B x T
         """
         assert self.processed_values is not None, " [!] make sure calling process_values() before running attention"
-        if self.use_loc_attn:
-            score, processed_query = self.get_loc_attn(query)
-        else:
-            score, processed_query = self.get_attn(query)
+        score, processed_query = self.get_attn(query)
         # masking
         if mask is not None:
             self.apply_score_masking(score, mask)
@@ -154,13 +142,10 @@ class Attention(keras.layers.Layer):
         attn_weights = attn_weights / tf.reduce_sum(
             attn_weights, axis=1, keepdims=True)
 
-        # update cumulative attention weights
-        if self.use_loc_attn:
-            self.update_loc_attn(attn_weights)
-
         # context_vector shape after sum == (batch_size, hidden_size)
-        context_vector = attn_weights * values
-        context_vector = tf.reduce_sum(context_vector, axis=1)
+        context_vector = tf.matmul(attn_weights, values, transpose_a=True, transpose_b=False)
+        # context_vector = tf.squeeze(context_vector, axis=1)
+        # context_vector = attn_weights * values
+        # context_vector = tf.reduce_sum(context_vector, axis=1)
         self.attn_weights = attn_weights
-
         return context_vector
