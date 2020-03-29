@@ -91,7 +91,6 @@ class Tacotron(tf.keras.Model):
     #        tf.TensorSpec(shape=(None, None, 80), dtype=tf.float32),
     #    ])
     def call(self, characters, text_lengths, mel_specs): # speaker_ids=None):
-        print('Tracing!')
         B = shape_list(characters)[0]
         mask = tf.sequence_mask(text_lengths)
         inputs = self.embedding(characters)

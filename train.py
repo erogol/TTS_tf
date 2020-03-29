@@ -35,6 +35,7 @@ from TTS_tf.utils.measures import alignment_diagonal_score
 np.random.seed(1)
 tf.random.set_seed(1)
 tf.executing_eagerly()
+tf.config.list_physical_devices('GPU')
 use_cuda = tf.test.is_gpu_available()
 num_gpus = len(tf.config.experimental.list_physical_devices('GPU'))
 print(" > Using CUDA: ", use_cuda)
@@ -115,10 +116,10 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
         loader_time = time.time() - end_time
 
         # convert to tf
-        text_input = tf.convert_to_tensor(text_input).gpu()
-        text_lengths = tf.convert_to_tensor(text_lengths).gpu()
-        linear_input = tf.convert_to_tensor(linear_input).gpu()
-        mel_input = tf.convert_to_tensor(mel_input).gpu()
+        text_input = tf.convert_to_tensor(text_input)
+        text_lengths = tf.convert_to_tensor(text_lengths)
+        linear_input = tf.convert_to_tensor(linear_input)
+        mel_input = tf.convert_to_tensor(mel_input)
         mel_lengths = tf.convert_to_tensor(mel_lengths)
 
         if c.use_speaker_embedding:
@@ -302,6 +303,13 @@ def evaluate(model, criterion, criterion_st, ap, global_step, epoch):
             mel_input = data[4]
             mel_lengths = data[5]
             stop_targets = data[6]
+
+            text_input = tf.convert_to_tensor(text_input).gpu()
+            text_lengths = tf.convert_to_tensor(text_lengths).gpu()
+            linear_input = tf.convert_to_tensor(linear_input).gpu()
+            mel_input = tf.convert_to_tensor(mel_input).gpu()
+            mel_lengths = tf.convert_to_tensor(mel_lengths)
+
 
             if c.use_speaker_embedding:
                 speaker_ids = [speaker_mapping[speaker_name]
