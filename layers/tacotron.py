@@ -244,19 +244,14 @@ class Decoder(keras.layers.Layer):
         B = shape_list(inputs)[0]
         T = shape_list(inputs)[1]
         self.attention.init_states(inputs)
-        # go frame as zeros matrix
-        if self.use_memory_queue:
-            self.memory_input = tf.zeros(
-                [B, self.memory_dim * self.memory_size])
-        else:
-            self.memory_input = tf.zeros([B, self.memory_dim])
         # decoder states
-        self.attention_rnn_hidden = tf.zeros([B, 256])
-        self.decoder_rnn_hiddens = [
+        attention_rnn_hidden = tf.zeros([B, 256])
+        decoder_rnn_hiddens = [
             tf.zeros([B, 256]) for idx in range(len(self.decoder_rnns))
         ]
-        self.context_vec = tf.zeros([B, 1, self.input_dim])
+        context_vec = tf.zeros([B, 1, self.input_dim])
         self.attention.process_values(inputs)
+        return attention_rnn_hidden, decoder_rnn_hiddens, context_vec
 
     def _parse_outputs(self, outputs, attentions, stop_tokens):
         # Back to batch first
@@ -267,35 +262,35 @@ class Decoder(keras.layers.Layer):
             tf.transpose(tf.stack(stop_tokens), (1, 0, 2)), 2)
         return outputs, attentions, stop_tokens
 
-    def decode(self, inputs, processed_memory, mask=None):
+    def decode(self, inputs, processed_memory, states, mask=None):
+        attention_rnn_hidden, decoder_rnn_hiddens, context_vec = states
+
         # Attention RNN
-        attention_rnn_input = tf.concat([processed_memory, self.context_vec], -1)
-        self.attention_rnn_hidden = self.attention_rnn(attention_rnn_input, initial_state=self.attention_rnn_hidden)
-        self.context_vec = self.attention(self.attention_rnn_hidden, inputs,
+        attention_rnn_input = tf.concat([processed_memory, context_vec], -1)
+        attention_rnn_hidden = self.attention_rnn(attention_rnn_input, initial_state=attention_rnn_hidden)
+        context_vec = self.attention(attention_rnn_hidden, inputs,
                                           mask)
         # Concat RNN output and attention context vector
         decoder_input = self.project_to_decoder_in(
-            tf.concat([tf.expand_dims(self.attention_rnn_hidden, axis=1), self.context_vec], -1))
+            tf.concat([tf.expand_dims(attention_rnn_hidden, axis=1), context_vec], -1))
         # Pass through the decoder RNNs
         for idx in range(len(self.decoder_rnns)):
-            self.decoder_rnn_hiddens[idx] = self.decoder_rnns[idx](
-                decoder_input, initial_state=self.decoder_rnn_hiddens[idx])
+            decoder_rnn_hiddens[idx] = self.decoder_rnns[idx](
+                decoder_input, initial_state=decoder_rnn_hiddens[idx])
             # Residual connection
-            decoder_input = tf.expand_dims(self.decoder_rnn_hiddens[idx],
+            decoder_input = tf.expand_dims(decoder_rnn_hiddens[idx],
                                            1) + decoder_input
         decoder_output = tf.squeeze(decoder_input, axis=1)
 
         # predict mel vectors from decoder vectors
         output = self.proj_to_mel(decoder_output)
-        # output = torch.sigmoid(output)
         # predict stop token
         stopnet_input = tf.concat([decoder_output, output], -1)
-        if self.separate_stopnet:
-            stop_token = self.stopnet(tf.stop_gradient(stopnet_input))
-        else:
-            stop_token = self.stopnet(stopnet_input)
+        # TODO: separate stopnet
+        stop_token = self.stopnet(stopnet_input)
         output = output[:, :self.r * self.memory_dim]
-        return output, stop_token, tf.squeeze(self.attention.attn_weights, -1)
+        states = attention_rnn_hidden, decoder_rnn_hiddens, context_vec
+        return output, stop_token, tf.squeeze(self.attention.attn_weights, -1), states
 
     def _update_memory_input(self, new_memory):
         self.memory_input = new_memory[:, self.memory_dim * (self.r - 1):]
@@ -321,22 +316,28 @@ class Decoder(keras.layers.Layer):
         outputs = tf.TensorArray(dtype=tf.float32, size=num_iter)
         attentions = tf.TensorArray(dtype=tf.float32, size=num_iter)
         stop_tokens = tf.TensorArray(dtype=tf.float32, size=num_iter)
-        self._init_states(inputs)
-            #stop_tokens.append(stop_tokenr
+        states = self._init_states(inputs)
         memory_aligned = memory[:, (self.r - 1):(T-self.r):self.r]
         prenet_in = tf.concat([memory_zero, memory_aligned], axis=1)
         prenet_out = self.prenet(prenet_in)
         # TODO: memory queuing
-        t = 0
-        while t < num_iter:
-            new_memory = tf.expand_dims(prenet_out[:, t], axis=1)
-            # if speaker_embeddings is not None:
-            # self.memory_input = tf.concat([self.memory_input, speaker_embeddings], axis=-1)
-            output, stop_token, attention = self.decode(inputs, new_memory, mask)
-            outputs = outputs.write(t, output)
-            attentions = attentions.write(t, attention)
-            stop_tokens = stop_tokens.write(t, stop_token)
-            t += 1
+
+        step = tf.constant(0, dtype=tf.int32)
+        def _body(step, states, inputs, prenet_out, outputs, attentions, stop_tokens):
+            new_memory = tf.expand_dims(prenet_out[:, step], axis=1)
+            output, stop_token, attention, states = self.decode(inputs, new_memory, states, mask)
+            outputs = outputs.write(step, output)
+            attentions = attentions.write(step, attention)
+            stop_tokens = stop_tokens.write(step, stop_token)
+            return step + 1, states, inputs, prenet_out, outputs, attentions, stop_tokens
+
+        _, states, _, prenet_out, outputs, attentions, stop_tokens = tf.while_loop(lambda *arg: True,
+                        _body,
+                        loop_vars=(step, states, inputs, prenet_out, outputs, attentions, stop_tokens),
+                        parallel_iterations=32,
+                        swap_memory=True,
+                        maximum_iterations=num_iter)
+
         outputs = outputs.stack()
         attentions = attentions.stack()
         stop_tokens = stop_tokens.stack()
