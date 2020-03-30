@@ -95,16 +95,17 @@ class Tacotron(tf.keras.Model):
         mask = tf.sequence_mask(text_lengths)
         inputs = self.embedding(characters)
         self._init_states()
+        # TODO: fix this
         # self.compute_speaker_embedding(speaker_ids)
         if self.num_speakers > 1:
             inputs = self._concat_speaker_embedding(inputs,
                                                     self.speaker_embeddings)
         encoder_outputs = self.encoder(inputs)
-        if self.gst:
-            encoder_outputs = self.compute_gst(encoder_outputs, mel_specs)
-        if self.num_speakers > 1:
-            encoder_outputs = self._concat_speaker_embedding(
-                encoder_outputs)
+        #if self.gst:
+        #    encoder_outputs = self.compute_gst(encoder_outputs, mel_specs)
+        #if self.num_speakers > 1:
+        #    encoder_outputs = self._concat_speaker_embedding(
+        #        encoder_outputs)
         mel_outputs, alignments, stop_tokens = self.decoder(
             encoder_outputs, mel_specs, mask)
         mel_outputs = tf.reshape(mel_outputs, [B, -1, self.mel_dim])
