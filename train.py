@@ -53,7 +53,7 @@ def setup_loader(ap, is_val=False, verbose=False):
         dataset = MyDataset(
             c.r,
             c.text_cleaner,
-            meta_data=meta_data_eval[:64] if is_val else meta_data_train,
+            meta_data=meta_data_eval if is_val else meta_data_train,
             ap=ap,
             batch_group_size=0 if is_val else c.batch_group_size * c.batch_size,
             min_seq_len=c.min_seq_len,
@@ -99,8 +99,47 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
     else:
         batch_n_iter = int(len(data_loader.dataset) / c.batch_size)
     end_time = time.time()
+
+    # @tf.function(input_signature=[
+    #        tf.TensorSpec(shape=(32, None), dtype=tf.int32),
+    #        tf.TensorSpec(shape=(32, ), dtype=tf.int32),
+    #        tf.TensorSpec(shape=(32, None, 80), dtype=tf.float32),
+    #        tf.TensorSpec(shape=(32, ), dtype=tf.int32),
+    #        tf.TensorSpec(shape=(32, None), dtype=tf.int32),
+    #    ])
+    # @tf.function()
+    def train_step(text_input, text_lengths, mel_input, mel_lengths, stop_targets):
+        with tf.GradientTape() as tape:
+            # forward pass model
+            decoder_output, postnet_output, alignments, stop_tokens = model(
+                text_input, text_lengths, mel_input)
+            # loss computation
+            stop_loss = criterion_st(
+                stop_tokens, stop_targets) # if c.stopnet else 0.0
+            # if c.loss_masking:
+            decoder_loss = criterion(
+                decoder_output, mel_input, mel_lengths)
+                #if c.model in ["Tacotron", "TacotronGST"]:
+            postnet_loss = criterion(
+                postnet_output, mel_input, mel_lengths)
+                #else:
+                #    postnet_loss = criterion(
+                #        postnet_output, mel_input, mel_lengths)
+            #else:
+            #    decoder_loss = criterion(decoder_output, mel_input)
+            #    if c.model in ["Tacotron", "TacotronGST"]:
+            #        postnet_loss = criterion(postnet_output, linear_input)
+            #    else:
+            #        postnet_loss = criterion(postnet_output, mel_input)
+            loss = decoder_loss + postnet_loss + stop_loss
+            # if not c.separate_stopnet and c.stopnet:
+            # loss += stop_loss
+        grads = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        return loss, decoder_loss, postnet_loss, stop_loss, alignments
+
     for num_iter, data in enumerate(data_loader):
-        start_time = time.time()
+        # start_time = time.time()
 
         # setup input data
         text_input = data[0]
@@ -118,7 +157,7 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
         # convert to tf
         text_input = tf.convert_to_tensor(text_input)
         text_lengths = tf.convert_to_tensor(text_lengths)
-        linear_input = tf.convert_to_tensor(linear_input)
+    #    linear_input = tf.convert_to_tensor(linear_input)
         mel_input = tf.convert_to_tensor(mel_input)
         mel_lengths = tf.convert_to_tensor(mel_lengths)
 
@@ -129,43 +168,14 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
             speaker_ids = None
 
         # set stop targets view, we predict a single stop token per r frames prediction
-        stop_targets = stop_targets.reshape(text_input.shape[0],
-                                         stop_targets.shape[1] // c.r, -1)
-        stop_targets = tf.squeeze(stop_targets.sum(2) > 0.0)
         global_step += 1
-        current_lr = optimizer.lr.numpy()
+        # TODO: fix
+        # current_lr = optimizer.lr.numpy()
+        current_lr = 0
+        start_time = time.time()
+        loss, decoder_loss, postnet_loss, stop_loss, alignments = train_step(text_input, text_lengths, mel_input, mel_lengths, stop_targets)
 
-        with tf.GradientTape(persistent=False) as tape:
-            # forward pass model
-            decoder_output, postnet_output, alignments, stop_tokens = model(
-                text_input, text_lengths, mel_input)
-            
-            # loss computation
-            stop_loss = criterion_st(
-                stop_tokens, stop_targets) if c.stopnet else 0.0
-            if c.loss_masking:
-                decoder_loss = criterion(
-                    decoder_output, mel_input, mel_lengths)
-                if c.model in ["Tacotron", "TacotronGST"]:
-                    postnet_loss = criterion(
-                        postnet_output, linear_input, mel_lengths)
-                else:
-                    postnet_loss = criterion(
-                        postnet_output, mel_input, mel_lengths)
-            else:
-                decoder_loss = criterion(decoder_output, mel_input)
-                if c.model in ["Tacotron", "TacotronGST"]:
-                    postnet_loss = criterion(postnet_output, linear_input)
-                else:
-                    postnet_loss = criterion(postnet_output, mel_input)
-            loss = decoder_loss + postnet_loss 
-            
-            if not c.separate_stopnet and c.stopnet:
-                loss += stop_loss
-        
-        grads = tape.gradient(loss, model.trainable_variables)
-        optimizer.apply_gradients(zip(grads, model.trainable_variables))
-
+        step_time = time.time() - start_time
         # compute alignment score
         align_score = alignment_diagonal_score(alignments.numpy())
         keep_avg.update_value('avg_align_score', align_score)
@@ -174,9 +184,8 @@ def train(model, criterion, criterion_st, optimizer, optimizer_st, scheduler,
         #if c.separate_stopnet:
         #    stopnet_grads = tape.gradient(stop_loss, model.decoder.stopnet.trainable_variables)
         #    optimizer_st.apply_gradients(zip(stopnet_grads, model.decoder.stopnet.trainable_variables))
-        del tape
+        # del tape
 
-        step_time = time.time() - start_time
         epoch_time += step_time
 
         if global_step % c.print_step == 0:
@@ -479,7 +488,7 @@ def main(args):  # pylint: disable=redefined-outer-name
         optimizer_st = None
 
     criterion = loss_l1 if c.model in [
-        "Tacotron", "TacotronGST"] else l2_loss
+        "Tacotron", "TacotronGST"] else loss_l2
     
     criterion_st = stopnet_loss if c.stopnet else None
 
@@ -537,6 +546,7 @@ def main(args):  # pylint: disable=redefined-outer-name
         train_loss, global_step = train(model, criterion, criterion_st,
                                         optimizer, optimizer_st, scheduler,
                                         ap, global_step, epoch)
+        break
         val_loss = evaluate(model, criterion, criterion_st,
                             ap, global_step, epoch)
         print(
