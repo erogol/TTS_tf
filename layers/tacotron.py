@@ -40,10 +40,7 @@ class Highway(keras.layers.Layer):
             units, bias_initializer=keras.initializers.Constant(value=-1))
         self.relu = keras.layers.ReLU()
         self.sigmoid = keras.activations.sigmoid
-        # self.init_layers()
 
-    # @tf.function(input_signature=(tf.TensorSpec(shape=[None],
-                                                # dtype=tf.float32), ))
     def call(self, inputs):
         H = self.relu(self.H(inputs))
         T = self.sigmoid(self.T(inputs))
@@ -188,14 +185,12 @@ class Decoder(keras.layers.Layer):
                  use_forward_attn, use_trans_agent, use_forward_attn_mask,
                  use_loc_attn, separate_stopnet, speaker_embedding_dim):
         super(Decoder, self).__init__()
-        self.r_init = r
-        self.r = r
+        self.r_init = tf.constant(r, dtype=tf.int32)
+        self.r = tf.constant(r, dtype=tf.int32)
         self.input_dim = input_dim
         self.max_decoder_steps = 500
-        self.use_memory_queue = memory_size > 0
         self.memory_size = memory_size if memory_size > 0 else r
         self.memory_dim = memory_dim
-        self.separate_stopnet = separate_stopnet
         self.query_dim = 256
         self.attn_dim = 128
         # memory -> |Prenet| -> processed_memory
@@ -223,19 +218,7 @@ class Decoder(keras.layers.Layer):
         self.stopnet = StopNet(256 + memory_dim * self.r_init)
 
     def set_r(self, new_r):
-        self.r = new_r
-
-    def _reshape_memory(self, memory):
-        """
-        Reshape the spectrograms for given 'r'
-        """
-        B = memory.shape[0]
-        # Grouping multiple frames if necessary
-        if memory.shape[-1] == self.memory_dim and self.r > 1:
-            memory = tf.reshape(memory, [B, -1, tf.shape(memory)[2] * self.r])
-        # Time first (T_decoder, B, memory_dim)
-        memory = tf.transpose(memory, perm=[1, 0, 2])
-        return memory
+        self.r = tf.constant(new_r, dtype=tf.int32)
 
     def _init_states(self, inputs):
         """
@@ -274,12 +257,15 @@ class Decoder(keras.layers.Layer):
         decoder_input = self.project_to_decoder_in(
             tf.concat([tf.expand_dims(attention_rnn_hidden, axis=1), context_vec], -1))
         # Pass through the decoder RNNs
-        for idx in range(len(self.decoder_rnns)):
-            decoder_rnn_hiddens[idx] = self.decoder_rnns[idx](
-                decoder_input, initial_state=decoder_rnn_hiddens[idx])
-            # Residual connection
-            decoder_input = tf.expand_dims(decoder_rnn_hiddens[idx],
-                                           1) + decoder_input
+        decoder_rnn_hiddens[0] = self.decoder_rnns[0](
+                decoder_input, initial_state=decoder_rnn_hiddens[0])
+        # Residual connection
+        decoder_input = tf.expand_dims(decoder_rnn_hiddens[0],
+                                       1) + decoder_input
+        decoder_rnn_hiddens[1] = self.decoder_rnns[1](
+                decoder_input, initial_state=decoder_rnn_hiddens[1])
+        decoder_input = tf.expand_dims(decoder_rnn_hiddens[1],
+                                       1) + decoder_input
         decoder_output = tf.squeeze(decoder_input, axis=1)
 
         # predict mel vectors from decoder vectors
@@ -290,7 +276,7 @@ class Decoder(keras.layers.Layer):
         stop_token = self.stopnet(stopnet_input)
         output = output[:, :self.r * self.memory_dim]
         states = attention_rnn_hidden, decoder_rnn_hiddens, context_vec
-        return output, stop_token, tf.squeeze(self.attention.attn_weights, -1), states
+        return output, stop_token, states, tf.squeeze(self.attention.attn_weights, -1)
 
     def _update_memory_input(self, new_memory):
         self.memory_input = new_memory[:, self.memory_dim * (self.r - 1):]
@@ -323,17 +309,17 @@ class Decoder(keras.layers.Layer):
         # TODO: memory queuing
 
         step = tf.constant(0, dtype=tf.int32)
-        def _body(step, states, inputs, prenet_out, outputs, attentions, stop_tokens):
+        def _body(step, states, inputs, prenet_out, outputs, stop_tokens, attentions):
             new_memory = tf.expand_dims(prenet_out[:, step], axis=1)
-            output, stop_token, attention, states = self.decode(inputs, new_memory, states, mask)
+            output, stop_token, states, attention = self.decode(inputs, new_memory, states, mask)
             outputs = outputs.write(step, output)
             attentions = attentions.write(step, attention)
             stop_tokens = stop_tokens.write(step, stop_token)
-            return step + 1, states, inputs, prenet_out, outputs, attentions, stop_tokens
+            return step + 1, states, inputs, prenet_out, outputs, stop_tokens, attentions
 
-        _, states, _, prenet_out, outputs, attentions, stop_tokens = tf.while_loop(lambda *arg: True,
+        _, states, _, prenet_out, outputs, stop_tokens, attentions = tf.while_loop(lambda *arg: True,
                         _body,
-                        loop_vars=(step, states, inputs, prenet_out, outputs, attentions, stop_tokens),
+                        loop_vars=(step, states, inputs, prenet_out, outputs, stop_tokens, attentions),
                         parallel_iterations=32,
                         swap_memory=True,
                         maximum_iterations=num_iter)
@@ -345,7 +331,7 @@ class Decoder(keras.layers.Layer):
         attentions = tf.transpose(attentions, [1, 0 ,2])
         stop_tokens = tf.transpose(stop_tokens, [1, 0, 2])
         stop_tokens = tf.squeeze(stop_tokens, axis=2)
-        return outputs, attentions, stop_tokens
+        return outputs, stop_tokens, attentions
 
     def inference(self, inputs, speaker_embeddings=None):
         """

@@ -106,11 +106,12 @@ class Tacotron(tf.keras.Model):
         #if self.num_speakers > 1:
         #    encoder_outputs = self._concat_speaker_embedding(
         #        encoder_outputs)
-        mel_outputs, alignments, stop_tokens = self.decoder(
+        mel_outputs, stop_tokens, alignments= self.decoder(
             encoder_outputs, mel_specs, mask)
         mel_outputs = tf.reshape(mel_outputs, [B, -1, self.mel_dim])
         linear_outputs = self.postnet(mel_outputs)
         linear_outputs = self.last_linear(linear_outputs)
+        print('tracing model.call()')
         return mel_outputs, linear_outputs, alignments, stop_tokens
 
     def inference(self, characters, speaker_ids=None, style_mel=None):
