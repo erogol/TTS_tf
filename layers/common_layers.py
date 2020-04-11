@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.python.ops import math_ops
+from tensorflow_addons.seq2seq import BahdanauAttention
 
 from TTS_tf.utils.tf_utils import shape_list
 
@@ -64,6 +65,84 @@ class Prenet(keras.layers.Layer):
             else:
                 x = linear(x)
         return x
+
+
+
+def _location_sensitive_score(processed_query, keys, processed_loc, attention_v, attention_b):
+    dtype = processed_query.dtype
+    num_units = keys.shape[-1].value or array_ops.shape(keys)[-1]
+    return tf.reduce_sum(attention_v * tf.tanh(keys + processed_query + processed_loc + attention_b), [2])
+
+
+class LocationSensitiveAttention(BahdanauAttention):
+    def __init__(self,
+                 units,
+                 memory=None,
+                 memory_sequence_length=None,
+                 normalize=False,
+                 probability_fn="softmax",
+                 kernel_initializer="glorot_uniform",
+                 dtype=None,
+                 name="LocationSensitiveAttention",
+                 location_attention_filters=32,
+                 location_attention_kernel_size=31):
+
+        super(LocationSensitiveAttention,
+                    self).__init__(units=units,
+                                    memory=memory,
+                                    memory_sequence_length=memory_sequence_length,
+                                    normalize=normalize,
+                                    probability_fn='softmax',  ## parent module default
+                                    kernel_initializer=kernel_initializer,
+                                    dtype=dtype,
+                                    name=name)
+        if probability_fn == 'sigmoid':
+            self.probability_fn = lambda score, _: self._sigmoid_normalization(score)
+        self.location_conv = keras.layers.Conv1D(filters=location_attention_filters, kernel_size=location_attention_kernel_size, padding='same', use_bias=False)
+        self.location_dense = keras.layers.Dense(units, use_bias=False)
+        # self.v = keras.layers.Dense(1, use_bias=True)
+        
+    def  _location_sensitive_score(self, processed_query, keys, processed_loc):
+        processed_query = tf.expand_dims(processed_query, 1)
+        return tf.reduce_sum(self.attention_v * tf.tanh(keys + processed_query + processed_loc), [2])
+
+    def _location_sensitive(self, alignment_cum, alignment_old):
+        alignment_cat = tf.stack([alignment_cum, alignment_old], axis=2)
+        return self.location_dense(self.location_conv(alignment_cat))
+
+    def _sigmoid_normalization(self, score):
+        return tf.nn.sigmoid(score) / tf.reduce_sum(tf.nn.sigmoid(score), axis=-1, keepdims=True)
+
+    # def _apply_masking(self, score, mask):
+    #     padding_mask = tf.expand_dims(math_ops.logical_not(mask), 2)
+    #     # Bias so padding positions do not contribute to attention distribution.
+    #     score -= 1.e9 * math_ops.cast(padding_mask, dtype=tf.float32)
+    #     return score
+
+    def _calculate_attention(self, query, state):
+        alignment_cum, alignment_old = state[:2]
+        processed_query = self.query_layer(
+            query) if self.query_layer else query
+        processed_loc = self._location_sensitive(alignment_cum, alignment_old)
+        score = self._location_sensitive_score(
+            processed_query,
+            self.keys,
+            processed_loc)
+        alignment = self.probability_fn(score, state)
+        alignment_cum = alignment_cum + alignment
+        state[0] = alignment_cum
+        state[1] = alignment
+        return alignment, state
+
+    def compute_context(self, alignments):
+        expanded_alignments = tf.expand_dims(alignments, 1)
+        context = tf.matmul(expanded_alignments, self.values)
+        context = tf.squeeze(context, [1])
+        return context
+
+    # def call(self, query, state):
+    #     alignment, next_state = self._calculate_attention(query, state)
+    #     return alignment, next_state
 
 
 class Attention(keras.layers.Layer):
