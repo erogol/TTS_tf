@@ -177,7 +177,7 @@ class MyDataset(Dataset):
         # Puts each data field into a tensor with outer dimension batch size
         if isinstance(batch[0], collections.Mapping):
 
-            text_lenghts = np.array([len(d["text"]) for d in batch])
+            text_lengths = np.array([len(d["text"]) for d in batch])
 
             wav = [batch[idx]['wav'] for idx in range(len(batch))]
             item_idxs = [batch[idx]['item_idx'] for idx in range(len(batch))]
@@ -214,8 +214,18 @@ class MyDataset(Dataset):
             linear = linear.transpose(0, 2, 1)
             mel = mel.transpose(0, 2, 1)
 
-            return text.astype(np.int32), text_lenghts.astype(np.int32), speaker_name, linear.astype(np.float32), mel.astype(np.float32), mel_lengths.astype(np.int32), \
-                   stop_targets.astype(np.float32), item_idxs
+            # format stop targets
+            stop_targets = stop_targets.reshape(text.shape[0],
+                                             stop_targets.shape[1] // self.outputs_per_step, -1)
+            stop_targets = np.squeeze(stop_targets.sum(2) > 0.0)
+
+            return text.astype(np.int32), text_lengths.astype(np.int32), speaker_name, linear.astype(np.float32), mel.astype(np.float32), mel_lengths.astype(np.int32), stop_targets.astype(np.int32), item_idxs 
+            # return tf.convert_to_tensor(text.astype(np.int32)), \
+            #         tf.convert_to_tensor(text_lengths.astype(np.int32)), \
+            #         speaker_name, tf.convert_to_tensor(linear.astype(np.float32)),\
+            #         tf.convert_to_tensor(mel.astype(np.float32)), \
+            #         tf.convert_to_tensor(mel_lengths.astype(np.int32)), \
+            #        stop_targets.astype(np.int32), item_idxs
 
         raise TypeError(("batch must contain tensors, numbers, dicts or lists;\
                          found {}".format(type(batch[0]))))
