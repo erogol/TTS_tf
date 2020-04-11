@@ -128,7 +128,7 @@ class Decoder(keras.layers.Layer):
 
     def decode(self, memory, frames, states, memory_seq_length=None):
         B, T, D = shape_list(memory)
-        num_iter = shape_list(frames)[1] // self
+        num_iter = shape_list(frames)[1] // self.r
         # init states
         frame_zero = states[0]
         frames = tf.concat([frame_zero, frames], axis=1)
